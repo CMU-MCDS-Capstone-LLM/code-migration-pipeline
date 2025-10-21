@@ -1,0 +1,6 @@
+[submodule "coding-agent"]
+	path = coding-agent
+	url = git@github.com:CMU-MCDS-Capstone-LLM/swe-agent-migration.git
+[submodule "testing-agent"]
+	path = testing-agent
+	url = git@github.com:CMU-MCDS-Capstone-LLM/testing-agent.git

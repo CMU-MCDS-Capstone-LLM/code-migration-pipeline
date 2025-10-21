@@ -1,0 +1,14 @@
+.envrc
+
+data/envs/*
+!data/envs/README.md
+data/eval-tests/*
+!data/eval-tests/README.md
+data/input-tests/*
+!data/input-tests/README.md
+data/repos/*
+!data/repos/README.md
+data/trajectories/*
+!data/trajectories/README.md
+data/score/*
+!data/score/README.md
