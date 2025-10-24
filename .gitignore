@@ -12,3 +12,5 @@ data/trajectories/*
 !data/trajectories/README.md
 data/score/*
 !data/score/README.md
+
+data/repo-yamls

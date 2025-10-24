@@ -1,0 +1,6 @@
+coding-agent:
+  # Stored at coding-agent/swe-agent/config/
+  config: code_migration.yaml
+testing-agent:
+  config:
+evaluator:
