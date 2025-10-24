@@ -80,9 +80,10 @@ Format of testing agent python impl
 ```python
 class TestingAgent:
   def __init__(self, test_config: TestConfig, test_executor: TestExecutor):
-    pass 
+    self.test_executor: TestExecutor = test_executor
 
 class TestExecutor(ABC):
+  @abstractmethod
   def run_test(self, *args) -> TestInfo:
     pass
 
@@ -101,9 +102,31 @@ class RemoteTestExecutor(TestExecutor):
 
 class LocalTestExecutor(TestExecutor):
   def run_test(self, *args) -> TestInfo:
-    conda activate xxxx
+    conda activate repo_env
     pytest <args>
-    return TestInfo()
+    deactivate
+
+# local test
+TestingAgent(LocalTestExecutor(...))
+
+# pipeline
+TestingAgent(RemoteTestExecutor(...))
+```
+
+Repograph
+
+```python
+class LSPRepoGraphRunner(ABC):
+  @abstractmethod
+  def find_def_by_fqn(self, ...):
+    pass
+
+class LocalLSPRepoGraphRunner(LSLRepoGraphRunner):
+  def __init__(self, lsp_client: MultilspyLSPClient):
+    self.lsp_client = lsp_client
+
+  def find_def_by_fqn(self, ...):
+    self.lsp_client.find_def_by_fqn(...)
 ```
 
 ### Xinyu
@@ -151,3 +174,37 @@ Each todo item below is a development stage, whose code should be pushed to GitH
 - [ ] **how to run repo's tests within the repo's docker container? The unit test must be executed within a container that has repo's env**.
 
 - [ ] b/f 10/26 `run.sh` -> `run.py`, selectively choose test, and generate more with coverage
+
+## Debug Draft
+
+### Abstract Base Class (ABC)
+
+```python
+from abc import ABC
+
+# abstract class, can't be initialized
+class TestExecutor(ABC):
+  @abstractmethod
+  def run_test(self, test_info: TestInfo) -> TestResult:
+    pass
+
+# Depends on abstract TestExecutor, doesn't care run_test implementation
+# The execution logic of testing agent is irrelevant to run_test implementation
+class TesingAgent:
+  def __init__(self, test_exeuctor: TestExecutor):
+    pass
+
+  def run(self):
+    test_info: TestInfo = self.get_test_info()
+    self.test_executor.run_test()
+
+# Local testing
+def main():
+  test_executor = LocalTestExecutor()
+  testing_agent = TestingAgent(test_executor)
+
+# Remote testing
+def main():
+  test_executor = RemoteTestExecutor()
+  testing_agent = TestingAgent(test_executor)
+```
