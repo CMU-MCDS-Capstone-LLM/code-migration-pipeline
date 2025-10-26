@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code_migration_infra"
+version = "0.1.0"
+description = "Infrastructure for AI-based code migration"
+requires-python = ">=3.11"
+dependencies = ["docker>=7.0.0", "click>=8.1.0", "pyyaml>=6.0"]
+
+[project.scripts]
+mig-pipeline = "infra.cli:cli"
+
+[tool.setuptools]
+packages = ["infra"]

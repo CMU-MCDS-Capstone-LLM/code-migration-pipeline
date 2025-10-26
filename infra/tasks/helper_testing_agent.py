@@ -1,0 +1,12 @@
+from ..pipeline.task import Task 
+
+class HelperTesingAgentTask(Task):
+    def should_run(self) -> bool:
+        return True
+    
+    def load_cached_result(self) -> None:
+        raise NotImplementedError("Load cached result for helper testing agent has not been implemented!")
+    
+    def run(self) -> None:
+        pass
+

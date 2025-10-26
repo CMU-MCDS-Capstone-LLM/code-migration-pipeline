@@ -1,4 +1,6 @@
 .envrc
+__pycache__/
+*.egg-info/
 
 data/envs/*
 !data/envs/README.md

@@ -1,0 +1,6 @@
+ENV_BASE_FOLDER = "envs"
+EVAL_TESTS_BASE_FOLDER = "eval-tests"
+HELPER_TESTS_BASE_FOLDER = "eval-tests"
+REPO_BASE_FOLDER = "repos"
+SCORE_BASE_FOLDER = "scores"
+TRAJECTORY_BASE_FOLDER = "trajectories"

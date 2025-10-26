@@ -41,9 +41,10 @@ flowchart LR
   PatchCmpEval([patch cmp evaluator])
   PatchSimScore[[patch sim scores]]
 
-  UnitTestEval([patch cmp evaluator])
+  UnitTestEval([unit test pass rate evaluator])
   UnitTestScore[[unit test pass rate scores]]
 
+  RepoDl --> MigInfo
   MigInfo --> Code 
 
   RepoDl --> Repo 
@@ -63,6 +64,7 @@ flowchart LR
   GTPatch --> PatchCmpEval
   PatchCmpEval --> PatchSimScore
 
+  RepoDl --> GTPatch
   GTPatch --> EvalTestAgent
   Repo --> EvalTestAgent
   EvalTestAgent --> EvalTests
@@ -70,5 +72,4 @@ flowchart LR
   GenPatch --> UnitTestEval
   EvalTests --> UnitTestEval
   UnitTestEval --> UnitTestScore
-  
 ```
