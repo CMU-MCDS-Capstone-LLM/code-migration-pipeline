@@ -14,12 +14,13 @@ from ..const.config import (
     TRAJECTORY_BASE_FOLDER,
 )
 
+
 @dataclass(slots=True)
 class MigConfig:
     """
     Concrete per-datapoint configuration. Shared across all components of the migration system.
 
-    Note that, on init, this config will 
+    Note that, on init, this config will
     - resolve all paths (must be folders) to absolute path, and create them if not exists
     """
 
@@ -30,6 +31,7 @@ class MigConfig:
     helper_tests_path: Path
     score_path: Path
     trajectory_path: Path
+    problem_statement: str = ""
     post_migration_branch: str = DEFAULT_GT_PATCH_BRANCH_NAME
 
     def __post_init__(self) -> None:
@@ -55,7 +57,9 @@ class MigConfig:
             path.mkdir(parents=True, exist_ok=True)
 
     @classmethod
-    def from_base_dir_and_commit(cls, base_dir: Path, commit_info: CommitInfo) -> Self:
+    def from_base_dir_and_commit(
+        cls, base_dir: Path, commit_info: CommitInfo, problem_statement: str = ""
+    ) -> Self:
         """
         Standard layout builder using shared infra constants. Subclasses (or callers)
         can reuse this to avoid duplicating path-join logic.
@@ -69,7 +73,8 @@ class MigConfig:
             repo_path=base_dir / REPO_BASE_FOLDER / identifier,
             score_path=base_dir / SCORE_BASE_FOLDER / identifier,
             trajectory_path=base_dir / TRAJECTORY_BASE_FOLDER / identifier,
-            commit_info=commit_info
+            commit_info=commit_info,
+            problem_statement=problem_statement,
         )
 
     @property
