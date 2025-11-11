@@ -1,3 +1,4 @@
+import hashlib
 import os
 import subprocess
 from typing import Collection
@@ -15,6 +16,14 @@ class CodingAgentTask(Task):
         super().__init__(task_id, config, depends_on)
         self.container_name = f"repo-{config.commit_info.folder_name}"
         self.swe_agent_container_name = f"swe-agent"
+        # Create the same network alias as DockerContainerTask (for repograph server URL)
+        folder_hash = hashlib.md5(config.commit_info.folder_name.encode()).hexdigest()[
+            :8
+        ]
+        self.network_alias = f"repo-{config.commit_info.folder_name[:30]}-{folder_hash}"
+        # Ensure alias is <= 63 chars (Docker DNS limit)
+        if len(self.network_alias) > 63:
+            self.network_alias = f"repo-{folder_hash}"
 
     def should_run(self) -> bool:
         """Run if no trajectory exists or needs updating"""
@@ -64,8 +73,10 @@ class CodingAgentTask(Task):
         env_vars = {
             "REPO_NAME": self.config.commit_info.folder_name,
             "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
-            "WORKSPACE_DIR": "/ws",  # Container path
+            "WORKSPACE_DIR": "/ws",
             "PROBLEM_STATEMENT": self.get_problem_statement(),
+            "REPO_CONTAINER_NAME": self.container_name,  
+            "REPOGRAPH_SERVER_HOST": self.network_alias,
         }
 
         # Build docker run command with environment variables
