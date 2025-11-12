@@ -84,6 +84,7 @@ class CodingAgentTask(Task):
             "REPO_CONTAINER_NAME": self.container_name,
             "REPOGRAPH_SERVER_HOST": self.network_alias,
             "OUTPUT_DIR": "/trajectories",  # Mounted trajectory path in container
+            "SWE_AGENT_TRAJECTORY_DIR": "/trajectories",
         }
 
         # Build docker run command with environment variables
