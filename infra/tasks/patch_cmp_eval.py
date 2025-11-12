@@ -10,7 +10,7 @@ from ..pipeline.task import Task, TaskId
 from ..models import Score
 
 class PatchCmpEvalTask(Task):
-    """Download repository from PyMigBench"""
+    """Evaluate patch similarity using PatchSimilarityEvaluator"""
     evaluator: PatchSimilarityEvaluator
     
     def __init__(self, config: MigConfig, depends_on: Collection[TaskId]):
@@ -19,17 +19,34 @@ class PatchCmpEvalTask(Task):
         self.evaluator = PatchSimilarityEvaluator(config)
     
     def should_run(self) -> bool:
-        """Run only if repo doesn't exist"""
-        return True
+        """Run if no score exists or needs updating"""
+        score_file = self.config.score_path / "patch_similarity.json"
+        return not score_file.exists()
     
     def load_cached_result(self) -> Score:
-        """Load existing repo info"""
-        raise NotImplementedError("Load cached result for patch cmp eval is not implemented")
+        """Load existing score from file"""
+        score_file = self.config.score_path / "patch_similarity.json"
+        if score_file.exists():
+            import json
+            with open(score_file) as f:
+                data = json.load(f)
+            return Score(
+                value=data.get("similarity_score", 0.0),
+                metadata=data
+            )
+        return Score(value=0.0, metadata={})
     
     def run(self) -> Score:
-        """Download the repo"""
-        score = self.evaluator.evaluate()
+        """Evaluate patch similarity"""
+        result = self.evaluator.evaluate()
+        
+        if result.get("status") == "success":
+            similarity_score = result.get("similarity_score", 0.0)
+        else:
+            # Handle error case
+            similarity_score = 0.0
+            
         return Score(
-            value=score["similarity_score"],
-            metadata=score
+            value=similarity_score,
+            metadata=result
         )
