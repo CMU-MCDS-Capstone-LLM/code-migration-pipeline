@@ -21,13 +21,11 @@ class DockerContainerTask(Task):
         task_id = TaskId(f"docker_container_{config.identifier}")
         super().__init__(task_id, config, depends_on)
         self.container_name = f"repo-{config.commit_info.folder_name}"
-        # Create a shorter network alias for DNS (Docker DNS labels limited to 63 chars)
-        # Use first 30 chars of folder name + hash suffix to ensure uniqueness
+
         folder_hash = hashlib.md5(config.commit_info.folder_name.encode()).hexdigest()[
             :8
         ]
         self.network_alias = f"repo-{config.commit_info.folder_name[:30]}-{folder_hash}"
-        # Ensure alias is <= 63 chars (Docker DNS limit)
         if len(self.network_alias) > 63:
             self.network_alias = f"repo-{folder_hash}"
         self.dockerfile_path = config.env_path / "Dockerfile"
@@ -64,6 +62,32 @@ class DockerContainerTask(Task):
         server_port = 8000
         server_url = f"http://{network_alias}:{server_port}"
 
+        # Ensure repo directory is writable (needed for scratch files)
+        # Permissions are already set during copy, but ensure they're correct
+        # Make world-writable so any container user can read/write
+        make_writable_cmd = [
+            "docker",
+            "exec",
+            "-u",
+            "root",  # Run as root to fix permissions
+            container_name,
+            "bash",
+            "-c",
+            f"chmod -R a+rwX {repo_path_in_container} 2>/dev/null || true",
+        ]
+        subprocess.run(make_writable_cmd, check=False, timeout=30)
+
+        # Clean up old scratch files from repo directory (always cleanup, even if server is running)
+        cleanup_cmd = [
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-c",
+            f"find {repo_path_in_container} -name '_scratch_*.py' -delete 2>/dev/null || true",
+        ]
+        subprocess.run(cleanup_cmd, check=False, timeout=30)
+
         # Quick check if port 8000 is listening (server is running)
         port_check = subprocess.run(
             [
@@ -93,8 +117,31 @@ class DockerContainerTask(Task):
             logger.error("LSP-Repograph not mounted at /lsp-repograph")
             return
 
-        # Install dependencies
-        logger.info("Installing lsp-repograph dependencies...")
+        # Check filesystem space first
+        logger.info("Checking filesystem space...")
+        df_cmd = [
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-c",
+            "df -h / | tail -1",
+        ]
+        df_result = subprocess.run(
+            df_cmd, check=False, capture_output=True, text=True, timeout=10
+        )
+        if df_result.returncode == 0:
+            logger.info(f"Filesystem usage: {df_result.stdout.strip()}")
+            # Check if filesystem is nearly full (>= 95%)
+            if "9[0-9]%" in df_result.stdout or "100%" in df_result.stdout:
+                logger.warning(
+                    "Filesystem is nearly full! You may need to clean up Docker images/volumes."
+                )
+                logger.warning("Run: docker system prune -a --volumes -f")
+
+        # Install dependencies (use Python 3.11 for LSP-Repograph)
+        # Use --break-system-packages for Python 3.11 (safe in containers, required for Debian 12)
+        logger.info("Installing lsp-repograph dependencies (Python 3.11)...")
         install_cmd = [
             "docker",
             "exec",
@@ -102,21 +149,104 @@ class DockerContainerTask(Task):
             "bash",
             "-c",
             "cd /lsp-repograph && "
-            "pip install -q -r requirements.txt 2>&1 || "
-            "(grep -v '^#' requirements.txt | grep -v '^$' | "
-            "sed 's/==.*$//; s/>=.*$//; s/<=.*$//; s/~=.*$//; s/!=.*$//' | "
-            "xargs pip install -q 2>&1)",
+            "python3.11 -m pip install --no-cache-dir --break-system-packages -r requirements.txt 2>&1",
         ]
         install_result = subprocess.run(
-            install_cmd, check=False, capture_output=True, text=True, timeout=180
+            install_cmd, check=False, capture_output=True, text=True, timeout=300
         )
         if install_result.returncode == 0:
-            logger.info("✓ Installed dependencies")
+            logger.info("✓ Installed LSP-Repograph dependencies")
         else:
-            logger.warning("Dependency installation had issues (continuing anyway)")
+            logger.error(
+                f"Failed to install LSP-Repograph dependencies (exit code: {install_result.returncode})"
+            )
+            logger.error(f"Installation output: {install_result.stdout[-1000:]}")
+            logger.error(f"Installation error: {install_result.stderr[-1000:]}")
+            # Try fallback: install without version pins
+            logger.info(
+                "Trying fallback installation (without version pins, Python 3.11)..."
+            )
+            fallback_cmd = [
+                "docker",
+                "exec",
+                container_name,
+                "bash",
+                "-c",
+                "cd /lsp-repograph && "
+                "grep -v '^#' requirements.txt | grep -v '^$' | "
+                "sed 's/==.*$//; s/>=.*$//; s/<=.*$//; s/~=.*$//; s/!=.*$//' | "
+                "xargs python3.11 -m pip install --no-cache-dir --break-system-packages 2>&1",
+            ]
+            fallback_result = subprocess.run(
+                fallback_cmd, check=False, capture_output=True, text=True, timeout=300
+            )
+            if fallback_result.returncode == 0:
+                logger.info("✓ Installed LSP-Repograph dependencies (fallback method)")
+            else:
+                logger.error(
+                    f"Fallback installation also failed (exit code: {fallback_result.returncode})"
+                )
+                logger.error(f"Fallback output: {fallback_result.stdout[-1000:]}")
+                logger.error(f"Fallback error: {fallback_result.stderr[-1000:]}")
+                raise RuntimeError(
+                    "Failed to install LSP-Repograph dependencies. Cannot start server."
+                )
 
-        # Start server in background
-        logger.info("Starting server...")
+        # Install server dependencies (Flask, Waitress) - Python 3.11
+        logger.info("Installing server dependencies (Flask, Waitress) - Python 3.11...")
+        server_deps_cmd = [
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-c",
+            "python3.11 -m pip install --no-cache-dir --break-system-packages flask waitress 2>&1",
+        ]
+        server_deps_result = subprocess.run(
+            server_deps_cmd, check=False, capture_output=True, text=True, timeout=60
+        )
+        if server_deps_result.returncode == 0:
+            logger.info("✓ Installed server dependencies")
+        else:
+            logger.error(
+                f"Failed to install server dependencies (exit code: {server_deps_result.returncode})"
+            )
+            logger.error(f"Output: {server_deps_result.stdout[-500:]}")
+            logger.error(f"Error: {server_deps_result.stderr[-500:]}")
+            raise RuntimeError(
+                "Failed to install server dependencies (Flask, Waitress). Cannot start server."
+            )
+
+        # Verify critical dependencies are installed (Python 3.11)
+        logger.info("Verifying dependencies are installed (Python 3.11)...")
+        verify_cmd = [
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-c",
+            "python3.11 -c 'import multilspy; import flask; import waitress; print(\"All dependencies available\")' 2>&1",
+        ]
+        verify_result = subprocess.run(
+            verify_cmd, check=False, capture_output=True, text=True, timeout=10
+        )
+        if verify_result.returncode == 0:
+            logger.info("✓ Verified all dependencies are available")
+        else:
+            logger.error(
+                f"Dependency verification failed (exit code: {verify_result.returncode})"
+            )
+            logger.error(f"Verification output: {verify_result.stdout}")
+            logger.error(f"Verification error: {verify_result.stderr}")
+            raise RuntimeError(
+                "Critical dependencies (multilspy, flask, waitress) are not available. Cannot start server."
+            )
+
+        # Start server in background (using Python 3.11)
+        # Use infra server (wraps LSP-Repograph without modifying it)
+        # Set TMPDIR to repo path so scratch files go there (writable location)
+        # Jedi LSP server will use Python 3.11 - it's a static analysis tool that works on any Python repo
+        logger.info("Starting server (Python 3.11)...")
         start_cmd = [
             "docker",
             "exec",
@@ -126,8 +256,8 @@ class DockerContainerTask(Task):
             "-c",
             f"export PATH=$HOME/.local/bin:$PATH && "
             f"export PYTHONPATH=/lsp-repograph:$PYTHONPATH && "
-            f"cd /lsp-repograph && "
-            f"nohup python -m lsp_repograph.server "
+            f"export TMPDIR={repo_path_in_container} && "
+            f"python3.11 /infra/utils/repograph_server.py "
             f"--repo-path '{repo_path_in_container}' "
             f"--port {server_port} "
             f"--host 0.0.0.0 "
@@ -173,7 +303,6 @@ class DockerContainerTask(Task):
         else:
             logger.error("Server failed to start (no logs available)")
 
-
     def run(self) -> str:
         """Ensure tests image exists, then ensure repo container is running."""
 
@@ -192,6 +321,7 @@ class DockerContainerTask(Task):
         ).stdout.strip()
 
         if not img_id:
+            logger.info(f"Building Docker image: {base_image_name}")
             subprocess.run(
                 [
                     "docker",
@@ -200,8 +330,6 @@ class DockerContainerTask(Task):
                     base_image_name,
                     "-f",
                     str(self.dockerfile_path),
-                    "--target",
-                    "tests",
                     str(self.config.repo_path),
                 ],
                 check=True,
@@ -215,9 +343,11 @@ class DockerContainerTask(Task):
 
         # Always copy from clean source to ensure we start with pristine repo state
         # This ensures migrations don't persist across runs
+        # Fix permissions immediately after copying so all containers can write
         logger.info(
             f"Copying clean repo from {self.config.repo_path.parent} to volume..."
         )
+        repo_name = self.config.commit_info.folder_name
         subprocess.run(
             [
                 "docker",
@@ -230,7 +360,9 @@ class DockerContainerTask(Task):
                 "alpine",
                 "sh",
                 "-c",
-                f"rm -rf /ws/{self.config.commit_info.folder_name} && cp -a /src/{self.config.commit_info.folder_name} /ws/",
+                f"rm -rf /ws/{repo_name} && "
+                f"cp -a /src/{repo_name} /ws/ && "
+                f"chmod -R a+rwX /ws/{repo_name}",
             ],
             check=False,
         )
@@ -258,6 +390,10 @@ class DockerContainerTask(Task):
         lsp_repograph_path = Path(__file__).parent.parent.parent / "LSP-Repograph"
         lsp_repograph_path = lsp_repograph_path.resolve()
 
+        # Get infra path for mounting (contains repograph_server.py)
+        infra_path = Path(__file__).parent.parent
+        infra_path = infra_path.resolve()
+
         # The repo is mounted at /ws, and the repo name is the folder name
         repo_name = self.config.commit_info.folder_name
         repo_path_in_container = f"/ws/{repo_name}"
@@ -277,6 +413,8 @@ class DockerContainerTask(Task):
                 f"{volume_name}:/ws",
                 "-v",
                 f"{lsp_repograph_path}:/lsp-repograph:ro",  # Mount as read-only
+                "-v",
+                f"{infra_path}:/infra:ro",  # Mount infra folder (contains server)
                 base_image_name,
                 "sleep",
                 "infinity",
@@ -286,53 +424,42 @@ class DockerContainerTask(Task):
             # Wait a moment for container to be ready
             time.sleep(1)
 
-            logger.info("Installing repository dependencies...")
-            install_repo_reqs_cmd = [
+            # Permissions are already set during copy (world-writable), but ensure they're correct
+            logger.info("Ensuring workspace permissions are correct...")
+            fix_perms_cmd = [
                 "docker",
                 "exec",
+                "-u",
+                "root",  # Run as root to fix permissions
                 self.container_name,
                 "bash",
                 "-c",
-                f"cd {repo_path_in_container} && "
-                "if [ -f requirements/requirements.txt ]; then "
-                "pip install -q -r requirements/requirements.txt 2>&1 || "
-                "(echo 'Exact versions failed, trying flexible versions...' && "
-                "grep -v '^#' requirements/requirements.txt | grep -v '^$' | "
-                "sed 's/==.*$//; s/>=.*$//; s/<=.*$//; s/~=.*$//; s/!=.*$//' | "
-                "xargs pip install -q 2>&1); "
-                "elif [ -f requirements.txt ]; then "
-                "pip install -q -r requirements.txt 2>&1 || "
-                "(echo 'Exact versions failed, trying flexible versions...' && "
-                "grep -v '^#' requirements.txt | grep -v '^$' | "
-                "sed 's/==.*$//; s/>=.*$//; s/<=.*$//; s/~=.*$//; s/!=.*$//' | "
-                "xargs pip install -q 2>&1); "
-                "else "
-                "echo 'No requirements.txt found, skipping'; "
-                "fi",
+                f"chmod -R a+rwX {repo_path_in_container} 2>/dev/null || true",
             ]
-            try:
-                repo_reqs_result = subprocess.run(
-                    install_repo_reqs_cmd,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-                if repo_reqs_result.returncode == 0:
-                    logger.info("✓ Installed repository dependencies")
-                else:
-                    logger.warning(
-                        f"Repository dependency installation had issues (code: {repo_reqs_result.returncode})"
-                    )
-                    logger.debug(f"Output: {repo_reqs_result.stdout[-500:]}")
-                    logger.debug(f"Error: {repo_reqs_result.stderr[-500:]}")
-            except subprocess.TimeoutExpired:
-                logger.warning("Repository dependency installation timed out")
-            except Exception as e:
-                logger.warning(f"Exception installing repository dependencies: {e}")
+            subprocess.run(fix_perms_cmd, check=False, timeout=30)
+
+            # Skip repository dependency installation - they're already in the Docker image
+            # The image has dependencies installed during build, so no need to install again
+            logger.info(
+                "Skipping repository dependency installation (already in Docker image)"
+            )
         elif not existing.lower().startswith("up"):
             subprocess.run(["docker", "start", self.container_name], check=True)
             time.sleep(1)
+
+            # Permissions are already set during copy (world-writable), but ensure they're correct
+            logger.info("Ensuring workspace permissions are correct...")
+            fix_perms_cmd = [
+                "docker",
+                "exec",
+                "-u",
+                "root",  # Run as root to fix permissions
+                self.container_name,
+                "bash",
+                "-c",
+                f"chmod -R a+rwX {repo_path_in_container} 2>/dev/null || true",
+            ]
+            subprocess.run(fix_perms_cmd, check=False, timeout=30)
 
             # If container was created before, we need to add the network alias
             # Check if alias exists, if not add it
@@ -367,50 +494,11 @@ class DockerContainerTask(Task):
             except Exception as e:
                 logger.warning(f"Could not ensure network alias: {e}")
 
-            logger.info("Installing repository dependencies...")
-            install_repo_reqs_cmd = [
-                "docker",
-                "exec",
-                self.container_name,
-                "bash",
-                "-c",
-                f"cd {repo_path_in_container} && "
-                "if [ -f requirements/requirements.txt ]; then "
-                "pip install -q -r requirements/requirements.txt 2>&1 || "
-                "(echo 'Exact versions failed, trying flexible versions...' && "
-                "grep -v '^#' requirements/requirements.txt | grep -v '^$' | "
-                "sed 's/==.*$//; s/>=.*$//; s/<=.*$//; s/~=.*$//; s/!=.*$//' | "
-                "xargs pip install -q 2>&1); "
-                "elif [ -f requirements.txt ]; then "
-                "pip install -q -r requirements.txt 2>&1 || "
-                "(echo 'Exact versions failed, trying flexible versions...' && "
-                "grep -v '^#' requirements.txt | grep -v '^$' | "
-                "sed 's/==.*$//; s/>=.*$//; s/<=.*$//; s/~=.*$//; s/!=.*$//' | "
-                "xargs pip install -q 2>&1); "
-                "else "
-                "echo 'No requirements.txt found, skipping'; "
-                "fi",
-            ]
-            try:
-                repo_reqs_result = subprocess.run(
-                    install_repo_reqs_cmd,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-                if repo_reqs_result.returncode == 0:
-                    logger.info("✓ Installed/updated repository dependencies")
-                else:
-                    logger.warning(
-                        f"Repository dependency installation had issues (code: {repo_reqs_result.returncode})"
-                    )
-                    logger.debug(f"Output: {repo_reqs_result.stdout[-500:]}")
-                    logger.debug(f"Error: {repo_reqs_result.stderr[-500:]}")
-            except subprocess.TimeoutExpired:
-                logger.warning("Repository dependency installation timed out")
-            except Exception as e:
-                logger.warning(f"Exception installing repository dependencies: {e}")
+            # Skip repository dependency installation - they're already in the Docker image
+            # The image has dependencies installed during build, so no need to install again
+            logger.info(
+                "Skipping repository dependency installation (already in Docker image)"
+            )
 
         # Start LSP-RepoGraph server in the container
         self._ensure_lsp_repograph_server(
