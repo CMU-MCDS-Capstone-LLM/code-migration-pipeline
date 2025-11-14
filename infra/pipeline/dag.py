@@ -1,107 +1,70 @@
+# infra/pipeline/dag.py
+from __future__ import annotations
+
 from collections import defaultdict
 import logging
-from typing import Dict, List
-import traceback
+from typing import Any, Dict, Iterable, List
 
-from .task import Task, TaskId
-from .context import PipelineContext
+from .task import Task
 
 
 class DAGExecutor:
-    """Topological sort executor with parallel execution support"""
+    """
+    Topological sort executor.
 
-    tasks: Dict[TaskId, Task]
-    context: PipelineContext
-    logger: logging.Logger
+    - Works over Task objects directly.
+    - Assumes each Task.execute() handles caching and output.
+    """
 
-    def __init__(self, tasks: List[Task]):
-        self.tasks = {task.task_id: task for task in tasks}
-        self.context = PipelineContext()
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, tasks: Iterable[Task[Any]]):
+        self.tasks: List[Task[Any]] = list(tasks)
+        self.logger = logging.getLogger(self.__class__.__name__)
 
-    def _build_dependency_graph(self) -> Dict[TaskId, List[TaskId]]:
-        """Returns adjacency list of dependencies"""
-        self.logger.debug("Build dependency graph for pipeline.")
-        graph = defaultdict(list)
-        for task in self.tasks.values():
-            for dep_id in task.depended_by:
-                graph[dep_id].append(task.task_id)
+    def _build_dependency_graph(self) -> Dict[Task[Any], List[Task[Any]]]:
+        """Returns adjacency list: dep_task -> [tasks that depend on it]."""
+        graph: Dict[Task[Any], List[Task[Any]]] = defaultdict(list)
+        for task in self.tasks:
+            for dep in task.depends_on:
+                graph[dep].append(task)
         return graph
 
-    def _topological_sort(self) -> List[List[TaskId]]:
-        """Returns list of execution levels (can run in parallel)"""
+    def _topological_levels(self) -> List[List[Task[Any]]]:
+        """
+        Returns list of execution levels (can run in parallel if needed).
+
+        Each level is a list of tasks whose dependencies are all in earlier levels.
+        """
         graph = self._build_dependency_graph()
-        self.logger.debug(
-            "Topological sort the dependency graph to get execution order."
-        )
-        in_degree = defaultdict(int)
+        in_degree: Dict[Task[Any], int] = {}
 
-        # Calculate in-degrees
-        for task_id in self.tasks:
-            in_degree[task_id] = len(self.tasks[task_id].depended_by)
+        for task in self.tasks:
+            in_degree[task] = len(task.depends_on)
 
-        # Find tasks with no dependencies (level 0)
-        levels = []
-        current_level = [tid for tid, deg in in_degree.items() if deg == 0]
+        levels: List[List[Task[Any]]] = []
+        current_level = [t for t, deg in in_degree.items() if deg == 0]
 
         while current_level:
             levels.append(current_level)
-            next_level = []
-
-            for task_id in current_level:
-                for dependent_id in graph[task_id]:
-                    in_degree[dependent_id] -= 1
-                    if in_degree[dependent_id] == 0:
-                        next_level.append(dependent_id)
-
+            next_level: List[Task[Any]] = []
+            for t in current_level:
+                for child in graph.get(t, []):
+                    in_degree[child] -= 1
+                    if in_degree[child] == 0:
+                        next_level.append(child)
             current_level = next_level
+
+        # Sanity check: did we cover all tasks?
+        if sum(len(l) for l in levels) != len(self.tasks):
+            raise RuntimeError("Cycle detected in task graph")
 
         return levels
 
-    def execute(self, parallel: bool = False):
-        """Execute DAG level by level"""
-        levels = self._topological_sort()
+    def execute(self) -> None:
+        """Execute the DAG level by level (single-threaded)."""
+        levels = self._topological_levels()
         self.logger.info("Execute pipeline.")
 
-        # Technically, we need a thread pool, but our pipeline is very small, so this will work as well.
         for level_idx, level in enumerate(levels):
-            print(f"Level {level_idx}: {len(level)} task(s)")
-
-            if parallel and len(level) > 1:
-                raise NotImplementedError(
-                    "For now, we only support single-threaded pipeline execution, since each pipeline is small and very sequential."
-                )
-                # # Use ThreadPoolExecutor for parallel execution
-                # from concurrent.futures import ThreadPoolExecutor
-                #
-                # with ThreadPoolExecutor(max_workers=len(level)) as executor:
-                #     futures = {
-                #         executor.submit(self._execute_task, tid): tid for tid in level
-                #     }
-                #     for future in futures:
-                #         future.result()  # Wait and handle errors
-            else:
-                # Sequential execution
-                for task_id in level:
-                    try:
-                        self._execute_task(task_id)
-                    except Exception as e:
-                        self.logger.error(
-                            f"Failed to execute task {task_id}. Got error: {e}"
-                        )
-                        self.logger.error(traceback.format_exc())
-
-    def _execute_task(self, task_id: TaskId):
-        """Execute a single task"""
-        task = self.tasks[task_id]
-
-        # Inject dependencies from context
-        for dep_id in task.depended_by:
-            dep_artifact = self.context.get_artifact(dep_id)
-            task.inputs[dep_id] = dep_artifact
-
-        # Execute
-        result = task.execute()
-
-        # Store result
-        self.context.store_artifact(task_id, result)
+            self.logger.info("Level %d: %d task(s)", level_idx, len(level))
+            for task in level:
+                task.execute()

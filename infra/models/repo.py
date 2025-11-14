@@ -1,6 +1,10 @@
 from dataclasses import dataclass
-from pymigbench_dl.const.git import DEFAULT_PRE_MIG_BRANCH_NAME, DEFAULT_GT_PATCH_BRANCH_NAME
+from pymigbench_dl.const.git import (
+    DEFAULT_PRE_MIG_BRANCH_NAME,
+    DEFAULT_GT_PATCH_BRANCH_NAME,
+)
 from pathlib import Path
+
 
 @dataclass
 class Repo:
