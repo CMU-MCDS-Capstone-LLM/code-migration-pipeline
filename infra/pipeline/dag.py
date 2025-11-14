@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 import logging
 from typing import Any, Dict, Iterable, List
+import traceback
 
 from .task import Task
 
@@ -64,7 +65,26 @@ class DAGExecutor:
         levels = self._topological_levels()
         self.logger.info("Execute pipeline.")
 
-        for level_idx, level in enumerate(levels):
-            self.logger.info("Level %d: %d task(s)", level_idx, len(level))
-            for task in level:
-                task.execute()
+        cleanup_queue: List[Task["Any"]] = []
+
+        try:
+            for level_idx, level in enumerate(levels):
+                self.logger.info("Level %d: %d task(s)", level_idx, len(level))
+                for task in level:
+                    cleanup_queue.append(task)
+                    task.execute()
+        except Exception as e:
+            if len(cleanup_queue) > 0:
+                cur_task = cleanup_queue[-1]
+                self.logger.error(f"Encounter error when executing task {cur_task}.")
+            else:
+                self.logger.error("Encounter error when executing task.")
+            self.logger.error(f"Error message: {e}")
+            self.logger.error(traceback.format_exc())
+        finally:
+            for task in cleanup_queue[::-1]:
+                try:
+                    task.cleanup()
+                except Exception as e:
+                    # If cleanup of one task fails, ignore it and continue to clean up other tasks
+                    self.logger.error(f"Got error when clean up task {task}: {e}")

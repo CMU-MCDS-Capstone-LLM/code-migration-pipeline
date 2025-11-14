@@ -4,22 +4,23 @@ import subprocess
 import tempfile
 import time
 import logging
-from typing import Collection
 from pathlib import Path
 
 from ..pipeline.config import MigConfig
 from ..pipeline.task import Task, TaskId
 from ..models import Repo
+from ..tasks.repo_dl import RepoDlTask
 
 logger = logging.getLogger(__name__)
 
 
-class DockerContainerTask(Task):
+class DockerContainerTask(Task[str]):
     """Manages Docker container for a specific repository"""
 
-    def __init__(self, config: MigConfig, depends_on: Collection[TaskId]):
+    def __init__(self, config: MigConfig, repo_dl: RepoDlTask) -> None:
         task_id = TaskId(f"docker_container_{config.identifier}")
-        super().__init__(task_id, config, depends_on)
+        super().__init__(task_id, config, depends_on=[repo_dl])
+        self.repo_dl = repo_dl
         self.container_name = f"repo-{config.commit_info.folder_name}"
 
         folder_hash = hashlib.md5(config.commit_info.folder_name.encode()).hexdigest()[

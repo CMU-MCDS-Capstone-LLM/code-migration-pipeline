@@ -1,12 +1,15 @@
-from ..pipeline.task import Task 
+# infra/tasks/unit_test_pass_rate_eval.py
+from ..pipeline.task import Task
 
-class UnitTestPassRateEvalTask(Task):
+
+class UnitTestPassRateEvalTask(Task[None]):
     def should_run(self) -> bool:
         return True
-    
+
     def load_cached_result(self) -> None:
-        raise NotImplementedError("Load cached result for unit test pass rate evaluation task has not been implemented!")
-    
+        raise NotImplementedError(
+            "Load cached result for unit test pass rate evaluation task has not been implemented!"
+        )
+
     def run(self) -> None:
         pass
-

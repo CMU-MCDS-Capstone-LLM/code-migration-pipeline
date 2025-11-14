@@ -2,20 +2,21 @@ import hashlib
 import os
 import shutil
 import subprocess
-from typing import Collection
 
 from ..pipeline.config import MigConfig
 from ..pipeline.task import Task, TaskId
+from ..tasks.docker_container import DockerContainerTask
 from dotenv import load_dotenv
 
 
-class CodingAgentTask(Task):
+class CodingAgentTask(Task[str]):
     """Run SWE-agent in Docker container with volume mounting for file synchronization"""
 
-    def __init__(self, config: MigConfig, depends_on: Collection[TaskId]):
+    def __init__(self, config: MigConfig, docker_task: DockerContainerTask) -> None:
         task_id = TaskId(f"coding_agent_{config.identifier}")
-        super().__init__(task_id, config, depends_on)
-        self.container_name = f"repo-{config.commit_info.folder_name}"
+        super().__init__(task_id, config, depends_on=[docker_task])
+        self.docker_task = docker_task
+        self.container_name = docker_task.container_name
         self.swe_agent_container_name = f"swe-agent"
         # Create the same network alias as DockerContainerTask (for repograph server URL)
         folder_hash = hashlib.md5(config.commit_info.folder_name.encode()).hexdigest()[
