@@ -2,7 +2,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
-from pymigbench_dl.const.git import DEFAULT_GT_PATCH_BRANCH_NAME
+from pymigbench_dl.const.git import (
+    DEFAULT_PRE_MIG_BRANCH_NAME,
+    DEFAULT_GT_PATCH_BRANCH_NAME,
+)
 from pymigbench_dl.loader import CommitInfo
 
 from ..const.config import (
@@ -32,6 +35,7 @@ class MigConfig:
     score_path: Path
     trajectory_path: Path
     problem_statement: str = ""
+    pre_migration_branch: str = DEFAULT_PRE_MIG_BRANCH_NAME
     post_migration_branch: str = DEFAULT_GT_PATCH_BRANCH_NAME
 
     def __post_init__(self) -> None:
