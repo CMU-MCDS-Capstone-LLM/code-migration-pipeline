@@ -1,4 +1,5 @@
 from pathlib import Path
+import yaml
 
 from pymigbench_dl.utils.repo import CommitInfo
 from .pipeline.dag import DAGExecutor
@@ -7,33 +8,116 @@ from .tasks.docker_container import DockerContainerTask
 from .tasks.coding_agent import CodingAgentTask
 from .tasks.patch_cmp_eval import PatchCmpEvalTask
 from .tasks.pymigbench_config import PyMigBenchMigConfig
+from .const.config import REPO_YAMLS_BASE_FOLDER
+
+
+def discover_repos(base_dir: Path) -> list[dict]:
+    """Discover all repos from repo-yamls directory"""
+    repo_yamls_dir = base_dir / REPO_YAMLS_BASE_FOLDER
+    repos = []
+
+    if not repo_yamls_dir.exists():
+        return repos
+
+    # Iterate through each subdirectory in repo-yamls
+    for repo_dir in repo_yamls_dir.iterdir():
+        if not repo_dir.is_dir():
+            continue
+
+        # Find YAML files in this directory
+        yaml_files = list(repo_dir.glob("*.yaml")) + list(repo_dir.glob("*.yml"))
+        if not yaml_files:
+            continue
+
+        # Parse the first YAML file
+        yaml_file = yaml_files[0]
+        try:
+            with open(yaml_file, "r") as f:
+                data = yaml.safe_load(f)
+
+            if "repo" in data and "commit" in data:
+                repos.append(
+                    {
+                        "repo": data["repo"],
+                        "commit_sha": data["commit"],
+                        "source": data.get("source", ""),
+                        "target": data.get("target", ""),
+                        "yaml_path": yaml_file,
+                    }
+                )
+        except Exception as e:
+            print(f"Error parsing {yaml_file}: {e}")
+            continue
+
+    return repos
+
+
+def generate_problem_statement(source: str, target: str) -> str:
+    """Generate a problem statement from source and target libraries"""
+    if source and target:
+        return f"Migrate from {source} to {target} framework. Update all imports, API calls, and configuration to use {target} instead of {source}."
+    return ""
+
+
+def run_single_repo(config: PyMigBenchMigConfig):
+    """Run pipeline for a single repo"""
+    print(f"\n{'='*80}")
+    print(
+        f"Running pipeline for: {config.commit_info.repo} ({config.commit_info.commit_sha[:8]})"
+    )
+    print(f"{'='*80}\n")
+
+    tasks = build_pipeline(config)
+    executor = DAGExecutor(tasks)
+    executor.execute()
+
+    print(f"\n✓ Completed: {config.commit_info.repo}\n")
 
 
 def main():
-    """Run migration pipeline for a single migration"""
+    """Run migration pipeline for all discovered repos"""
+    project_root = Path(__file__).parent.parent
+    base_dir = project_root / "data"
 
-    # config = PyMigBenchMigConfig.from_base_dir_and_commit(
-    #     base_dir=Path("/home/eiger/CMU/2025_Spring/11634_Capstone/codebase/tiny_data"),
-    #     commit_info=CommitInfo(
-    #         repo="adithyabsk/keep2roam",
-    #         commit_sha="d340eea2fdedde8908334eda34325d058fc88282",
-    #     ),
-    # )
-    config = PyMigBenchMigConfig.from_base_dir_and_commit(
-        base_dir=Path("./data"),
-        commit_info=CommitInfo(
-            repo="alice-biometrics/petisco",
-            commit_sha="9abf7b1f6ef8c55bdddcb9a5c2eff513f6a93130",
-        ),
-        problem_statement="Migrate from slackclient to slack-sdk framework. Update all API endpoints, middleware, and configuration to use slack-sdk instead of slackclient.",
-    )
+    # Discover all repos
+    repos = discover_repos(base_dir)
 
-    # Build task list
-    tasks = build_pipeline(config)
+    if not repos:
+        print("No repos found in repo-yamls directory")
+        return
 
-    # Execute
-    executor = DAGExecutor(tasks)
-    executor.execute()
+    print(f"Found {len(repos)} repo(s) to process:")
+    for i, repo_info in enumerate(repos, 1):
+        print(f"  {i}. {repo_info['repo']} ({repo_info['commit_sha'][:8]})")
+
+    # Run pipeline for each repo sequentially
+    for repo_info in repos:
+        try:
+            problem_statement = generate_problem_statement(
+                repo_info["source"], repo_info["target"]
+            )
+
+            config = PyMigBenchMigConfig.from_base_dir_and_commit(
+                base_dir=base_dir,
+                commit_info=CommitInfo(
+                    repo=repo_info["repo"],
+                    commit_sha=repo_info["commit_sha"],
+                ),
+                problem_statement=problem_statement,
+            )
+
+            run_single_repo(config)
+
+        except Exception as e:
+            print(f"\n✗ Error processing {repo_info['repo']}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            continue
+
+    print(f"\n{'='*80}")
+    print(f"All repos processed: {len(repos)} total")
+    print(f"{'='*80}\n")
 
 
 def build_pipeline(config):
