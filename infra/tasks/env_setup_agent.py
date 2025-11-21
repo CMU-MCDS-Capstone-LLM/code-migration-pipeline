@@ -4,7 +4,7 @@ from enum import Enum
 import json
 from logging import getLogger
 from pathlib import Path
-from typing import Optional, Self
+from typing import Self
 from env_setup_agent.consts import (
     DECISION_JSON_FILENAME,
     DEFAULT_DOCKER_BUILD_SCRIPT_FILENAME,

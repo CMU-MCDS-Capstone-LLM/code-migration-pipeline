@@ -36,7 +36,7 @@ def build_config_from_mig(base_dir: Path, mig: Migration) -> MigConfig:
         problem_statement=(
             f"Migrate from {mig.source} to {mig.target}. "
             "Update all API endpoints, middleware, and configuration to use "
-            "slack-sdk instead of slackclient."
+            f"{mig.source} instead of {mig.target}."
         ),
     )
     return config
